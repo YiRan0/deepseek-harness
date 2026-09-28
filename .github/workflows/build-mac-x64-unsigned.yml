@@ -1,0 +1,71 @@
+name: build-mac-x64-unsigned
+
+on:
+  push:
+    branches: [build/mac-x64-unsigned]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-15-intel
+    timeout-minutes: 300
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write apps/desktop/.env.macos
+        run: |
+          cat > apps/desktop/.env.macos <<'ENV'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_MACOS_PACK_CONCURRENCY=4
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://download.deepseek.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://download.deepseek.com"]}'
+          ENV
+
+      - name: Package macOS x64 (unsigned)
+        run: pnpm --dir apps/desktop run package:mac:x64 -- --unsigned
+
+      - name: List artifacts
+        if: always()
+        run: |
+          ls -la apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts || true
+          shasum -a 256 apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/* || true
+
+      - name: Publish release assets
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=mac-x64-unsigned
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" \
+            --title "DeepSeek Harness mac-x64 (Intel, unsigned)" \
+            --notes "Unsigned macOS Intel (x64) build produced from this fork. Built on macos-15-intel with pnpm run package:mac:x64 --unsigned. Not notarized: Gatekeeper blocks it until you run 'xattr -dr com.apple.quarantine' on the installed app." \
+            apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg \
+            apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.zip
+
+      - name: Upload workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-mac-x64-unsigned
+          path: |
+            apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg
+            apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.zip
+          if-no-files-found: warn
+          retention-days: 30
